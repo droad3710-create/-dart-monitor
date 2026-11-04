@@ -1,0 +1,132 @@
+name: OpenDART 자동차 부품 공시 수집
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 20 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dart-monitor
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: 공시 목록과 원문 수집
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import io
+          import json
+          import os
+          import re
+          import zipfile
+          from datetime import datetime, timedelta
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import urlopen
+          from xml.etree import ElementTree
+          from zoneinfo import ZoneInfo
+
+          key = os.environ.get("DART_API_KEY", "").strip()
+          if not key:
+              raise SystemExit("DART_API_KEY 비밀값을 등록하세요.")
+
+          def request(endpoint, **params):
+              query = urlencode({"crtfc_key": key, **params})
+              try:
+                  with urlopen("https://opendart.fss.or.kr/api/" + endpoint + "?" + query, timeout=30) as response:
+                      return response.read()
+              except Exception:
+                  raise RuntimeError(f"OpenDART {endpoint} 요청 실패") from None
+
+          today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+          date_args = {
+              "bgn_de": (today - timedelta(days=3)).strftime("%Y%m%d"),
+              "end_de": today.strftime("%Y%m%d"),
+              "page_count": 100,
+          }
+          tracked = {
+              "현대자동차", "기아", "현대모비스", "현대위아", "현대공업",
+              "HL만도", "화신", "서연이화", "디와이덕양", "디와이피", "DYP",
+              "아진전자부품", "대동기어", "경창산업", "지엠비코리아", "에스엘",
+              "텔레칩스", "넥스트칩", "LX세미콘", "글로벌테크놀로지",
+              "쓰리에이로직스", "LG에너지솔루션", "삼성SDI", "포스코퓨처엠",
+          }
+          title_match = re.compile(r"공급계약|기타경영사항|사업보고서|반기보고서|분기보고서")
+          parties = re.compile(r"현대자동차|현대차|기아자동차|기아\s*(?:주식회사|㈜)|현대모비스|현대트랜시스|제네시스")
+          topics = re.compile(r"수주|납품|공급|신규\s*개발|주요\s*고객|생산\s*시설|양산")
+          results = []
+          page = 1
+          while True:
+              listing = json.loads(request("list.json", page_no=page, **date_args))
+              if listing["status"] == "013":
+                  break
+              if listing["status"] != "000":
+                  raise SystemExit(f"공시 목록 조회 실패: {listing['status']}")
+              for row in listing["list"]:
+                  title = re.sub(r"\s+", "", row["report_nm"])
+                  if not title_match.search(title):
+                      continue
+                  if row["corp_name"] not in tracked and "공급계약" not in title:
+                      continue
+                  receipt = row["rcept_no"]
+                  raw = request("document.xml", rcept_no=receipt)
+                  if not zipfile.is_zipfile(io.BytesIO(raw)):
+                      raise SystemExit(f"공시 원문 다운로드 실패: {receipt}")
+                  with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                      fragments = []
+                      for name in archive.namelist():
+                          if name.lower().endswith(".xml"):
+                              root = ElementTree.fromstring(archive.read(name))
+                              fragments.extend(root.itertext())
+                  body = re.sub(r"\s+", " ", " ".join(fragments)).strip()
+                  if row["corp_name"] not in tracked and not parties.search(body):
+                      continue
+                  if "보고서" in title:
+                      spans = []
+                      for match in topics.finditer(body):
+                          start, end = max(0, match.start() - 140), min(len(body), match.end() + 390)
+                          if spans and start <= spans[-1][1]:
+                              spans[-1][1] = end
+                          else:
+                              spans.append([start, end])
+                      excerpt = "\n".join(body[start:end] for start, end in spans)[:24000]
+                  else:
+                      excerpt = body[:24000]
+                  results.append({
+                      "company": row["corp_name"],
+                      "title": row["report_nm"],
+                      "filed_at": row["rcept_dt"],
+                      "receipt": receipt,
+                      "source_url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=" + receipt,
+                      "source_excerpt": excerpt,
+                  })
+              if page >= listing["total_page"]:
+                  break
+              page += 1
+          snapshot = {
+              "window": date_args,
+              "filings": sorted(results, key=lambda item: item["receipt"], reverse=True),
+          }
+          Path("dart-filings.json").write_text(
+              json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          print(f"원문 확인한 후보 공시: {len(results)}건")
+          PY
+      - name: 수집 결과 저장
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dart-filings.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update OpenDART filing snapshot"
+            git push
+          fi
