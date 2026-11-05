@@ -111,7 +111,8 @@ jobs:
                   receipt = row["rcept_no"]
                   raw = request("document.xml", rcept_no=receipt)
                   if not zipfile.is_zipfile(io.BytesIO(raw)):
-                      raise SystemExit(f"공시 원문 다운로드 실패: {receipt}")
+                                            print(f"원문 미확보 공시: {receipt}")
+                      continue
                   with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                       fragments = []
                       for name in archive.namelist():
