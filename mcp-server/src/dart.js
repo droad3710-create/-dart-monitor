@@ -1,6 +1,10 @@
 // OpenDART API helpers. The API key never leaves this module (errors omit URLs).
 
 const API_BASE = "https://opendart.fss.or.kr/api/";
+const HEADERS = {
+  "user-agent": "Mozilla/5.0 (compatible; dart-mcp/1.0)",
+  accept: "application/json, application/xml, application/zip, */*",
+};
 
 export const STATUS_MESSAGES = {
   "000": "정상",
@@ -36,7 +40,7 @@ function failure(env, endpoint, error) {
 export async function dartJson(env, endpoint, params) {
   let response;
   try {
-    response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params));
+    response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params), { headers: HEADERS });
   } catch (error) {
     throw failure(env, endpoint, error);
   }
@@ -52,7 +56,7 @@ export async function dartJson(env, endpoint, params) {
 export async function dartBinary(env, endpoint, params) {
   let response;
   try {
-    response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params));
+    response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params), { headers: HEADERS });
   } catch (error) {
     throw failure(env, endpoint, error);
   }
