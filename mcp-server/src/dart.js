@@ -28,12 +28,17 @@ function buildUrl(key, endpoint, params) {
   return API_BASE + endpoint + "?" + query.toString();
 }
 
+function failure(env, endpoint, error) {
+  const detail = String(error && error.message || error).split(env.DART_API_KEY || "\u0000").join("***").slice(0, 200);
+  return new DartError(`OpenDART ${endpoint} 연결 실패 (${detail})`);
+}
+
 export async function dartJson(env, endpoint, params) {
   let response;
   try {
     response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params));
-  } catch {
-    throw new DartError(`OpenDART ${endpoint} 연결 실패`);
+  } catch (error) {
+    throw failure(env, endpoint, error);
   }
   if (!response.ok) throw new DartError(`OpenDART ${endpoint} HTTP ${response.status}`);
   const data = await response.json();
@@ -48,8 +53,8 @@ export async function dartBinary(env, endpoint, params) {
   let response;
   try {
     response = await fetch(buildUrl(env.DART_API_KEY, endpoint, params));
-  } catch {
-    throw new DartError(`OpenDART ${endpoint} 연결 실패`);
+  } catch (error) {
+    throw failure(env, endpoint, error);
   }
   if (!response.ok) throw new DartError(`OpenDART ${endpoint} HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
