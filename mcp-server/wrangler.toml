@@ -1,0 +1,11 @@
+name = "dart-mcp"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[vars]
+# 회사코드 인덱스 위치 (GitHub Actions "DART 회사코드 인덱스"가 만드는 파일)
+INDEX_BASE = "https://raw.githubusercontent.com/droad3710-create/-dart-monitor/main/corp-index/"
+
+# 비밀값은 여기 적지 말고 Cloudflare 대시보드 > Worker > Settings > Variables and Secrets 에서 등록
+#   DART_API_KEY : OpenDART 인증키
+#   MCP_TOKEN    : 커넥터 URL에 들어갈 긴 임의 문자열 (/mcp/<MCP_TOKEN>)
