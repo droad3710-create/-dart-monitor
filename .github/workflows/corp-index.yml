@@ -1,0 +1,84 @@
+name: DART 회사코드 인덱스
+
+on:
+  push:
+    paths:
+      - '.github/workflows/corp-index.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '41 19 * * 0'   # 매주 월요일 04:41 (한국 시간)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: corp-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: corpCode.xml 내려받아 인덱스 만들기
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import io, os, re, zipfile
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import urlopen
+          from xml.etree import ElementTree
+
+          key = os.environ.get("DART_API_KEY", "").strip()
+          if not key:
+              raise SystemExit("DART_API_KEY 비밀값을 등록하세요.")
+          try:
+              with urlopen("https://opendart.fss.or.kr/api/corpCode.xml?" + urlencode({"crtfc_key": key}), timeout=60) as r:
+                  raw = r.read()
+          except Exception:
+              raise SystemExit("corpCode.xml 요청 실패") from None
+          if not zipfile.is_zipfile(io.BytesIO(raw)):
+              raise SystemExit("corpCode.xml 응답이 ZIP이 아닙니다: " + raw[:200].decode("utf-8", "replace"))
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              xml = z.read([n for n in z.namelist() if n.lower().endswith(".xml")][0])
+
+          SHARDS = 64   # mcp-server/src/corp-index.js 와 같아야 함
+          strip = re.compile(r"\(주\)|㈜|주식회사|\(유\)|유한회사")
+          def norm(name):
+              return re.sub(r"\s+", "", strip.sub("", name)).lower()
+
+          listed, shards = [], {}
+          for item in ElementTree.fromstring(xml).iter("list"):
+              code = (item.findtext("corp_code") or "").strip()
+              name = (item.findtext("corp_name") or "").strip().replace("\t", " ")
+              stock = (item.findtext("stock_code") or "").strip()
+              n = norm(name)
+              if not code or not n:
+                  continue
+              row = f"{code}\t{name}\t{stock}\t{n}"
+              if stock:
+                  listed.append(row)
+              shards.setdefault(f"{ord(n[0]) % SHARDS:02d}", []).append(row)
+
+          out = Path("corp-index")
+          (out / "all").mkdir(parents=True, exist_ok=True)
+          for old in (out / "all").glob("*.tsv"):
+              old.unlink()
+          (out / "listed.tsv").write_text("\n".join(sorted(listed)) + "\n", encoding="utf-8")
+          for shard, rows in shards.items():
+              (out / "all" / f"{shard}.tsv").write_text("\n".join(sorted(rows)) + "\n", encoding="utf-8")
+          print(f"상장 {len(listed)}개, 전체 {sum(map(len, shards.values()))}개, 샤드 {len(shards)}개")
+          PY
+      - name: 인덱스 저장
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A corp-index
+          if ! git diff --cached --quiet; then
+            git commit -m "Update DART corp code index"
+            git pull --rebase
+            git push
+          fi
